@@ -15,7 +15,7 @@ npm run setup            # creates the SQLite DB and seeds a demo account
 npm run dev              # http://localhost:4000
 ```
 
-Demo login: `demo@pennypal.app` / `demo1234` (two kids: Aarav and Meera).
+Demo login: `demo@pennypal.app` / `demo1234` (two kids, Aarav and Meera, with goals, a split and this month's Earning).
 
 Scripts: `npm run build` + `npm start` (production), `npm run typecheck`, `npm run db:seed` (reset demo user), `npm run db:studio`.
 
@@ -40,8 +40,15 @@ Parents are the only account holders. `POST /auth/register` or `POST /auth/login
 | POST | `/auth/register` | `{ name, email, password }` |
 | POST | `/auth/login` | `{ email, password }` |
 | GET / PUT | `/me` | Signed-in parent (`name`) |
-| GET, POST | `/kids` | List / create kid profiles |
+| GET, POST | `/kids` | List (with each kid's `balance`) / create kid profiles |
 | GET, PUT, DELETE | `/kids/:id` | Read / replace / delete a kid profile |
+| GET | `/kids/:id/account` | `{ total, wallet, goals[], creditedMonths, currentMonth }` |
+| GET, POST | `/kids/:id/goals` | List / create goals `{ name, emoji, targetAmount }` (each with its jar `balance`) |
+| PUT, DELETE | `/goals/:id` | Update a goal / remove it (its coins move back to the Wallet) |
+| PUT | `/kids/:id/allocations` | Replace the monthly split `{ rules: [{ goalId, type: NONE\|PERCENT\|FIXED, value }] }` |
+| GET | `/kids/:id/allocations/preview` | How the next Monthly Earning would be split |
+| POST | `/kids/:id/earnings` | `{ kind: "MONTHLY", month: "2026-10" }` or `{ kind: "EXTRA", amount, note, goalId? }` |
+| GET | `/kids/:id/statement` | Every transaction, newest first, with its legs and the balance after it |
 
 A kid is `{ name, avatar, birthYear, monthlyEarning, earningDay }`:
 
@@ -49,6 +56,15 @@ A kid is `{ name, avatar, birthYear, monthlyEarning, earningDay }`:
 - `monthlyEarning` is a whole number of Kid Coins (0 – 1,000,000) credited every month as an **Earning**
 - `earningDay` is the day of the month (1–31) it is credited; short months use their last day
 - `avatar` is an emoji (defaults to 🦊)
+
+### Kid Coins ledger
+
+Balances are never stored. Every change is an append-only `LedgerEntry` (whole, signed Kid Coins; `goalId = null` is the Wallet) and balances are sums of entries. The legs of one action share a `groupId`, which the statement shows as one row.
+
+- **Monthly Earning** credits `monthlyEarning` to the Wallet and immediately splits it into goal jars: `FIXED` amounts first, then each `PERCENT` share of what is left (rounded down), never more than a goal still needs. The rest stays in the Wallet. Rules are checked so percentages total ≤ 100% and fixed amounts ≤ the Monthly Earning.
+- A Monthly Earning can only be added once per kid per month (unique key `monthly:{kidId}:{YYYY-MM}`), even under concurrent requests.
+- **Extra earnings** go to the Wallet or straight into a chosen goal.
+- A goal becomes `READY` when its jar reaches the target (and back to `ACTIVE` if the target is raised). Removing a goal moves its coins back to the Wallet and archives it so the statement stays complete.
 
 Errors are returned as `{ "error": "message" }` with an appropriate status code.
 

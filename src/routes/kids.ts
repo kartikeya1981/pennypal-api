@@ -16,18 +16,22 @@ export const MAX_MONTHLY_EARNING = 1_000_000
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" })
 const graphemes = (v: string) => [...segmenter.segment(v)].length
 
+/** Optional single emoji (one grapheme cluster, so 👩🏽‍🚀 counts as one). */
+export const emoji = (message: string, fallback?: string) =>
+  z.preprocess(
+    (v) => (v === "" || v == null ? fallback : v),
+    z
+      .string()
+      .trim()
+      .refine((v) => v.length <= 16 && graphemes(v) === 1, message)
+      .optional()
+  )
+
 function kidSchema() {
   const { min, max } = birthYearRange()
   return z.object({
     name: str("Name", 40),
-    avatar: z.preprocess(
-      (v) => (v === "" || v == null ? undefined : v),
-      z
-        .string()
-        .trim()
-        .refine((v) => v.length <= 16 && graphemes(v) === 1, "Avatar must be a single emoji")
-        .optional()
-    ),
+    avatar: emoji("Avatar must be a single emoji"),
     birthYear: z.preprocess(
       (v) => (v === "" || v == null ? undefined : Number(v)),
       z
@@ -44,7 +48,14 @@ function kidSchema() {
 export const kidsRouter = Router()
 
 kidsRouter.get("/", async (req, res) => {
-  res.json(await db.kid.findMany({ where: { parentId: userId(req) }, orderBy: { createdAt: "asc" } }))
+  const kids = await db.kid.findMany({ where: { parentId: userId(req) }, orderBy: { createdAt: "asc" } })
+  const sums = await db.ledgerEntry.groupBy({
+    by: ["kidId"],
+    where: { kidId: { in: kids.map((k) => k.id) } },
+    _sum: { amount: true },
+  })
+  const balance = new Map(sums.map((s) => [s.kidId, s._sum.amount ?? 0]))
+  res.json(kids.map((k) => ({ ...k, balance: balance.get(k.id) ?? 0 })))
 })
 
 kidsRouter.get("/:id", async (req, res) => {

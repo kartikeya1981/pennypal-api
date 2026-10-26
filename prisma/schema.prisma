@@ -29,6 +29,48 @@ model Kid {
   earningDay     Int      @default(1)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  goals          Goal[]
+  entries        LedgerEntry[]
 
   @@index([parentId])
+}
+
+model Goal {
+  id              String        @id @default(cuid())
+  kidId           String
+  kid             Kid           @relation(fields: [kidId], references: [id], onDelete: Cascade)
+  name            String
+  emoji           String        @default("🎯")
+  targetAmount    Int
+  /// ACTIVE | READY (jar reached the target) | ARCHIVED (removed; kept for the statement)
+  status          String        @default("ACTIVE")
+  /// NONE | PERCENT | FIXED: share of each Monthly Earning moved into this goal's jar
+  allocationType  String        @default("NONE")
+  allocationValue Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  entries         LedgerEntry[]
+
+  @@index([kidId])
+}
+
+/// Append-only. Balances are sums of entries; goalId null = Wallet. Legs of one action share a groupId.
+model LedgerEntry {
+  id             String   @id @default(cuid())
+  kidId          String
+  kid            Kid      @relation(fields: [kidId], references: [id], onDelete: Cascade)
+  goalId         String?
+  goal           Goal?    @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  /// Signed whole Kid Coins
+  amount         Int
+  /// MONTHLY_EARNING | EXTRA_EARNING | TRANSFER
+  type           String
+  groupId        String
+  note           String?
+  createdById    String
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+
+  @@index([kidId, createdAt])
+  @@index([goalId])
 }
