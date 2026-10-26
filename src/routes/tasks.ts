@@ -3,7 +3,7 @@ import { z } from "zod"
 import { userId } from "../auth"
 import { db } from "../db"
 import { HttpError } from "../errors"
-import { credit } from "../ledger"
+import { credit, serialize } from "../ledger"
 import { int, parse, str } from "../validation"
 import { ownedKid } from "./account"
 
@@ -40,7 +40,7 @@ async function ownedTask(req: Request) {
 /** null = Wallet; otherwise the goal must be one of this kid's current goals. */
 async function checkGoal(kidId: string, goalId: string | null | undefined) {
   if (!goalId) return null
-  const goal = await db.goal.findFirst({ where: { id: goalId, kidId, status: { not: "ARCHIVED" } } })
+  const goal = await db.goal.findFirst({ where: { id: goalId, kidId, status: { in: ["ACTIVE", "READY"] } } })
   if (!goal) throw new HttpError(400, "Unknown goal")
   return goal.id
 }
@@ -118,29 +118,31 @@ tasksRouter.post("/:id/approve", async (req, res) => {
   const body = parse(destinationSchema, req.body)
   const goalId = await checkGoal(task.kidId, body.rewardGoalId !== undefined ? body.rewardGoalId : task.rewardGoalId)
   // Claim the task first so concurrent approvals can't race each other into the ledger.
-  const { count } = await db.task.updateMany({
-    where: { id: task.id, status: { in: ["OPEN", "SUBMITTED"] } },
-    data: { status: "APPROVED", rewardGoalId: goalId, approvedAt: new Date() },
+  await serialize(async () => {
+    const { count } = await db.task.updateMany({
+      where: { id: task.id, status: { in: ["OPEN", "SUBMITTED"] } },
+      data: { status: "APPROVED", rewardGoalId: goalId, approvedAt: new Date() },
+    })
+    if (!count) throw new HttpError(409, "This task was already approved")
+    try {
+      await credit({
+        kidId: task.kidId,
+        createdById: userId(req),
+        amount: task.reward,
+        type: "TASK_EARNING",
+        note: task.title,
+        goalId,
+        idempotencyKey: `task:${task.id}`,
+      })
+    } catch (e) {
+      await db.task.update({
+        where: { id: task.id },
+        data: { status: task.status, rewardGoalId: task.rewardGoalId, approvedAt: null },
+      })
+      if (e instanceof HttpError && e.status === 409) throw new HttpError(409, "This task was already approved")
+      throw e
+    }
   })
-  if (!count) throw new HttpError(409, "This task was already approved")
-  try {
-    await credit({
-      kidId: task.kidId,
-      createdById: userId(req),
-      amount: task.reward,
-      type: "TASK_EARNING",
-      note: task.title,
-      goalId,
-      idempotencyKey: `task:${task.id}`,
-    })
-  } catch (e) {
-    await db.task.update({
-      where: { id: task.id },
-      data: { status: task.status, rewardGoalId: task.rewardGoalId, approvedAt: null },
-    })
-    if (e instanceof HttpError && e.status === 409) throw new HttpError(409, "This task was already approved")
-    throw e
-  }
   const approved = await db.task.findUniqueOrThrow({ where: { id: task.id } })
   if (task.recurrence !== "NONE") {
     await db.task.create({

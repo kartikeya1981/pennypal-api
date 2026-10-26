@@ -18,6 +18,7 @@ export const goalsRouter = Router()
 
 goalsRouter.put("/:id", async (req, res) => {
   const goal = await ownedGoal(req)
+  if (goal.status === "ACHIEVED") throw new HttpError(400, "This goal was already achieved")
   const data = parse(goalSchema, req.body)
   const updated = await db.$transaction(async (tx) => {
     await tx.goal.update({ where: { id: goal.id }, data })

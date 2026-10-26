@@ -1,11 +1,12 @@
 import { PrismaClient } from "@prisma/client"
 import bcrypt from "bcryptjs"
-import { credit } from "../src/ledger"
+import { credit, payout } from "../src/ledger"
 
 const db = new PrismaClient()
 
 const DEMO_EMAIL = "demo@pennypal.app"
 const DEMO_PASSWORD = "demo1234"
+const DEMO_PIN = "1234"
 
 async function main() {
   const year = new Date().getUTCFullYear()
@@ -15,6 +16,7 @@ async function main() {
       name: "Demo Parent",
       email: DEMO_EMAIL,
       passwordHash: await bcrypt.hash(DEMO_PASSWORD, 10),
+      kidModePinHash: await bcrypt.hash(DEMO_PIN, 10),
       kids: {
         create: [
           { name: "Aarav", avatar: "🦁", birthYear: year - 12, monthlyEarning: 500, earningDay: 1 },
@@ -30,6 +32,7 @@ async function main() {
       { kidId: aarav.id, name: "Video game", emoji: "🎮", targetAmount: 3000, allocationType: "FIXED", allocationValue: 200 },
       { kidId: aarav.id, name: "Tennis racket", emoji: "🎾", targetAmount: 2500, allocationType: "PERCENT", allocationValue: 50 },
       { kidId: meera.id, name: "Sparkly sneakers", emoji: "👟", targetAmount: 1500, allocationType: "PERCENT", allocationValue: 60 },
+      { kidId: meera.id, name: "Story book", emoji: "📚", targetAmount: 150 },
     ],
   })
   const month = new Date().toISOString().slice(0, 7)
@@ -45,6 +48,10 @@ async function main() {
     })
   }
   await credit({ kidId: aarav.id, createdById: parent.id, amount: 100, type: "EXTRA_EARNING", note: "Finished reading a book" })
+  const book = await db.goal.findFirstOrThrow({ where: { kidId: meera.id, name: "Story book" } })
+  await credit({ kidId: meera.id, createdById: parent.id, amount: 150, type: "EXTRA_EARNING", note: "Birthday gift", goalId: book.id })
+  await payout({ kidId: meera.id, createdById: parent.id, amount: 150, goalId: book.id, note: "Bought the story book" })
+  await payout({ kidId: aarav.id, createdById: parent.id, amount: 50, note: "Ice cream" })
   const [game] = await db.goal.findMany({ where: { kidId: aarav.id }, orderBy: { createdAt: "asc" } })
   await db.task.createMany({
     data: [
@@ -53,7 +60,7 @@ async function main() {
       { kidId: meera.id, title: "Water the plants", reward: 20, recurrence: "WEEKLY" },
     ],
   })
-  console.log(`Seeded demo account: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`)
+  console.log(`Seeded demo account: ${DEMO_EMAIL} / ${DEMO_PASSWORD} (Kid Mode PIN ${DEMO_PIN})`)
 }
 
 main()

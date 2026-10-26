@@ -3,7 +3,8 @@ import { z } from "zod"
 import { userId } from "../auth"
 import { db } from "../db"
 import { HttpError } from "../errors"
-import { allocate, balances, credit } from "../ledger"
+import { kidBadges } from "../badges"
+import { allocate, balances, credit, payout, transfer } from "../ledger"
 import { monthKey, monthLabel } from "../months"
 import { int, parse, str } from "../validation"
 import { emoji } from "./kids"
@@ -52,6 +53,23 @@ const earningSchema = z.discriminatedUnion("kind", [
   }),
 ])
 
+/** A Wallet-or-goal field: "" (or missing) means the Wallet. */
+const pot = z.preprocess((v) => (v === "" ? null : v), z.string().nullish())
+const optionalNote = z.preprocess((v) => (v === "" ? undefined : v), str("Note", 80).optional())
+
+const payoutSchema = z.object({
+  goalId: pot,
+  amount: int("Amount", { min: 1, max: MAX_GOAL_TARGET }),
+  note: optionalNote,
+})
+
+const transferSchema = z.object({
+  fromGoalId: pot,
+  toGoalId: pot,
+  amount: int("Amount", { min: 1, max: MAX_GOAL_TARGET }),
+  note: optionalNote,
+})
+
 const rulesSchema = z.object({
   rules: z.array(
     z.object({
@@ -92,7 +110,7 @@ accountRouter.post("/:id/goals", async (req, res) => {
 accountRouter.put("/:id/allocations", async (req, res) => {
   const kid = await ownedKid(req, req.params.id as string)
   const { rules } = parse(rulesSchema, req.body)
-  const goals = await db.goal.findMany({ where: { kidId: kid.id, status: { not: "ARCHIVED" } } })
+  const goals = await db.goal.findMany({ where: { kidId: kid.id, status: { in: ["ACTIVE", "READY"] } } })
   const ids = new Set(goals.map((g) => g.id))
   const seen = new Set<string>()
   let percent = 0
@@ -158,7 +176,7 @@ accountRouter.post("/:id/earnings", async (req, res) => {
     }
   } else {
     if (data.goalId) {
-      const goal = await db.goal.findFirst({ where: { id: data.goalId, kidId: kid.id, status: { not: "ARCHIVED" } } })
+      const goal = await db.goal.findFirst({ where: { id: data.goalId, kidId: kid.id, status: { in: ["ACTIVE", "READY"] } } })
       if (!goal) throw new HttpError(400, "Unknown goal")
     }
     await credit({
@@ -171,6 +189,26 @@ accountRouter.post("/:id/earnings", async (req, res) => {
     })
   }
   res.status(201).json(await goalsWithBalances(kid.id))
+})
+
+/** Real money handed to the kid: debits the Wallet or a goal jar. */
+accountRouter.post("/:id/payouts", async (req, res) => {
+  const kid = await ownedKid(req, req.params.id as string)
+  const data = parse(payoutSchema, req.body)
+  const { achieved } = await payout({ ...data, kidId: kid.id, createdById: userId(req) })
+  res.status(201).json({ ...(await goalsWithBalances(kid.id)), achieved })
+})
+
+accountRouter.post("/:id/transfers", async (req, res) => {
+  const kid = await ownedKid(req, req.params.id as string)
+  const data = parse(transferSchema, req.body)
+  await transfer({ ...data, kidId: kid.id, createdById: userId(req) })
+  res.status(201).json(await goalsWithBalances(kid.id))
+})
+
+accountRouter.get("/:id/badges", async (req, res) => {
+  const kid = await ownedKid(req, req.params.id as string)
+  res.json(await kidBadges(kid.id))
 })
 
 type Leg = { goalId: string | null; goalName: string | null; goalEmoji: string | null; amount: number }
