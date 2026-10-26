@@ -27,6 +27,7 @@ Scripts: `npm run build` + `npm start` (production), `npm run typecheck`, `npm r
 | `JWT_SECRET` | Secret used to sign access tokens |
 | `PORT` | Port to listen on (default `4000`) |
 | `CORS_ORIGIN` | Comma-separated browser origins allowed to call the API |
+| `MONTHLY_JOB` | Set to `off` to stop the automatic Monthly Earning job (on by default) |
 
 ## Authentication
 
@@ -49,6 +50,13 @@ Parents are the only account holders. `POST /auth/register` or `POST /auth/login
 | GET | `/kids/:id/allocations/preview` | How the next Monthly Earning would be split |
 | POST | `/kids/:id/earnings` | `{ kind: "MONTHLY", month: "2026-10" }` or `{ kind: "EXTRA", amount, note, goalId? }` |
 | GET | `/kids/:id/statement` | Every transaction, newest first, with its legs and the balance after it |
+| GET | `/kids/:id/tasks` | The kid's tasks, newest first |
+| POST | `/kids/:id/tasks` | Add a task: `title`, `reward`, optional `dueDate` (`YYYY-MM-DD`) and `recurrence` (`NONE`/`WEEKLY`/`MONTHLY`) |
+| PUT | `/tasks/:id` | Edit a task that isn't approved yet |
+| DELETE | `/tasks/:id` | Remove a task (already-paid rewards stay on the statement) |
+| POST | `/tasks/:id/submit` | Kid says "I did it": `{ rewardGoalId? }` (null = Wallet) |
+| POST | `/tasks/:id/reject` | Send a submitted task back to the kid |
+| POST | `/tasks/:id/approve` | Pay the reward as a Task Earning to the chosen Wallet/goal (`{ rewardGoalId? }` overrides) |
 
 A kid is `{ name, avatar, birthYear, monthlyEarning, earningDay }`:
 
@@ -64,6 +72,8 @@ Balances are never stored. Every change is an append-only `LedgerEntry` (whole, 
 - **Monthly Earning** credits `monthlyEarning` to the Wallet and immediately splits it into goal jars: `FIXED` amounts first, then each `PERCENT` share of what is left (rounded down), never more than a goal still needs. The rest stays in the Wallet. Rules are checked so percentages total ≤ 100% and fixed amounts ≤ the Monthly Earning.
 - A Monthly Earning can only be added once per kid per month (unique key `monthly:{kidId}:{YYYY-MM}`), even under concurrent requests.
 - **Extra earnings** go to the Wallet or straight into a chosen goal.
+- **Automatic Monthly Earning:** the API runs a job on start-up and every hour that credits each kid's Monthly Earning once their `earningDay` (UTC) has arrived; days 29–31 fall back to the last day of shorter months. It uses the same once-per-month key, so it never double-pays a month the parent already added by hand. Kids added after this month's earning day start next month. Set `MONTHLY_JOB=off` to disable it.
+- **Tasks:** `OPEN` → kid submits (`SUBMITTED`, with their chosen destination) → parent approves (`APPROVED`, credits a `TASK_EARNING`) or sends it back (`OPEN`). Parents can also approve an open task directly. Each task pays at most once (key `task:{id}`). Approving a `WEEKLY`/`MONTHLY` task creates the next one with its due date moved on.
 - A goal becomes `READY` when its jar reaches the target (and back to `ACTIVE` if the target is raised). Removing a goal moves its coins back to the Wallet and archives it so the statement stays complete.
 
 Errors are returned as `{ "error": "message" }` with an appropriate status code.

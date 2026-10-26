@@ -4,6 +4,7 @@ import { userId } from "../auth"
 import { db } from "../db"
 import { HttpError } from "../errors"
 import { allocate, balances, credit } from "../ledger"
+import { monthKey, monthLabel } from "../months"
 import { int, parse, str } from "../validation"
 import { emoji } from "./kids"
 
@@ -34,10 +35,6 @@ export async function goalsWithBalances(kidId: string) {
     goals: goals.map((g) => ({ ...g, balance: byGoal.get(g.id) ?? 0 })),
   }
 }
-
-const monthKey = (d = new Date()) => d.toISOString().slice(0, 7)
-const monthLabel = (m: string) =>
-  new Date(`${m}-01T00:00:00Z`).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
 
 const earningSchema = z.discriminatedUnion("kind", [
   z.object({

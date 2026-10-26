@@ -45,6 +45,14 @@ async function main() {
     })
   }
   await credit({ kidId: aarav.id, createdById: parent.id, amount: 100, type: "EXTRA_EARNING", note: "Finished reading a book" })
+  const [game] = await db.goal.findMany({ where: { kidId: aarav.id }, orderBy: { createdAt: "asc" } })
+  await db.task.createMany({
+    data: [
+      { kidId: aarav.id, title: "Finish reading a book", reward: 100, recurrence: "MONTHLY" },
+      { kidId: aarav.id, title: "Help wash the car", reward: 50, status: "SUBMITTED", rewardGoalId: game.id, submittedAt: new Date() },
+      { kidId: meera.id, title: "Water the plants", reward: 20, recurrence: "WEEKLY" },
+    ],
+  })
   console.log(`Seeded demo account: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`)
 }
 
