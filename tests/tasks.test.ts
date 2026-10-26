@@ -102,10 +102,15 @@ describe("tasks", () => {
   it("approving a repeating task creates the next one", async () => {
     const t = await addTask({ dueDate: "2026-01-31", recurrence: "MONTHLY" })
     await api.post(`/tasks/${t.id}/approve`).send({})
+    const oct = await addTask({ title: "Oct", dueDate: "2026-10-31", recurrence: "MONTHLY" })
+    await api.post(`/tasks/${oct.id}/approve`).send({})
+    const nov = (await api.get(`/kids/${kidId}/tasks`)).body.find((x: { title: string; status: string }) => x.title === "Oct" && x.status === "OPEN")
+    expect(nov.dueDate.slice(0, 10)).toBe("2026-11-30")
+    await api.delete(`/tasks/${nov.id}`)
     const w = await addTask({ dueDate: "2026-10-30", recurrence: "WEEKLY" })
     await api.post(`/tasks/${w.id}/approve`).send({})
     const open = (await api.get(`/kids/${kidId}/tasks`)).body.filter((x: { status: string }) => x.status === "OPEN")
-    expect(open.map((x: { dueDate: string }) => x.dueDate.slice(0, 10)).sort()).toEqual(["2026-03-03", "2026-11-06"])
+    expect(open.map((x: { dueDate: string }) => x.dueDate.slice(0, 10)).sort()).toEqual(["2026-02-28", "2026-11-06"])
   })
 
   it("is isolated per family and needs auth", async () => {

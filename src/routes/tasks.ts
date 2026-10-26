@@ -48,9 +48,14 @@ async function checkGoal(kidId: string, goalId: string | null | undefined) {
 function nextDue(due: Date | null, recurrence: string) {
   if (!due) return null
   const d = new Date(due)
-  if (recurrence === "WEEKLY") d.setUTCDate(d.getUTCDate() + 7)
-  else d.setUTCMonth(d.getUTCMonth() + 1)
-  return d
+  if (recurrence === "WEEKLY") {
+    d.setUTCDate(d.getUTCDate() + 7)
+    return d
+  }
+  // Same day next month; 29–31 fall back to the last day of a shorter month (31 Oct -> 30 Nov)
+  const y = d.getUTCFullYear()
+  const m = d.getUTCMonth() + 1
+  return new Date(Date.UTC(y, m, Math.min(d.getUTCDate(), new Date(Date.UTC(y, m + 1, 0)).getUTCDate())))
 }
 
 /** Mounted under /kids */
