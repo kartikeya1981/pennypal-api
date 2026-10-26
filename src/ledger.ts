@@ -1,12 +1,32 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import { randomUUID } from "node:crypto"
 import { Prisma } from "@prisma/client"
 import { db } from "./db"
+import { awardBadges } from "./badges"
 import { HttpError } from "./errors"
 
-export type EntryType = "MONTHLY_EARNING" | "EXTRA_EARNING" | "TASK_EARNING" | "TRANSFER"
+export type EntryType = "MONTHLY_EARNING" | "EXTRA_EARNING" | "TASK_EARNING" | "TRANSFER" | "PAYOUT"
 export type AllocationType = "NONE" | "PERCENT" | "FIXED"
 
 type Tx = Prisma.TransactionClient
+
+const inLock = new AsyncLocalStorage<boolean>()
+let queue: Promise<unknown> = Promise.resolve()
+
+/**
+ * Runs ledger writes one at a time. SQLite can't run concurrent write transactions reliably, and
+ * overdraw checks must see every earlier write. Nested calls run inside the outer lock.
+ * (A Postgres deployment could use row locks instead.)
+ */
+export function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  if (inLock.getStore()) return fn()
+  const locked = () => inLock.run(true, fn)
+  const run = queue.then(locked, locked)
+  queue = run.catch(() => undefined)
+  return run
+}
+
+const kc = (n: number) => `${n.toLocaleString("en-IN")} ${n === 1 ? "Kid Coin" : "Kid Coins"}`
 
 export type AllocatableGoal = {
   id: string
@@ -67,7 +87,7 @@ type Credit = {
   kidId: string
   createdById: string
   amount: number
-  type: Exclude<EntryType, "TRANSFER">
+  type: Exclude<EntryType, "TRANSFER" | "PAYOUT">
   note?: string | null
   /** Credit straight into this goal's jar instead of the Wallet + auto-split. */
   goalId?: string | null
@@ -76,7 +96,15 @@ type Credit = {
 }
 
 /** Credits Kid Coins in one transaction. Throws 409 if the idempotency key was already used. */
-export async function credit(c: Credit) {
+export function credit(c: Credit) {
+  return serialize(async () => {
+    const groupId = await writeCredit(c)
+    await awardBadges(c.kidId)
+    return groupId
+  })
+}
+
+async function writeCredit(c: Credit) {
   const groupId = randomUUID()
   const base = { kidId: c.kidId, createdById: c.createdById, type: c.type, groupId, note: c.note ?? null }
   try {
@@ -114,7 +142,7 @@ export async function credit(c: Credit) {
 
 /** Moves a goal's whole jar back to the Wallet and archives the goal. */
 export async function archiveGoal(goal: { id: string; kidId: string; name: string }, createdById: string) {
-  await db.$transaction(async (tx) => {
+  await serialize(() => db.$transaction(async (tx) => {
     const { byGoal } = await balances(tx, goal.kidId)
     const amount = byGoal.get(goal.id) ?? 0
     if (amount > 0) {
@@ -132,6 +160,106 @@ export async function archiveGoal(goal: { id: string; kidId: string; name: strin
       where: { id: goal.id },
       data: { status: "ARCHIVED", allocationType: "NONE", allocationValue: 0 },
     })
+  }))
+}
+
+async function pot(tx: Tx, kidId: string, goalId: string | null | undefined, statuses: string[]) {
+  if (!goalId) return null
+  const goal = await tx.goal.findFirst({
+    where: { id: goalId, kidId, status: { in: statuses } },
+  })
+  if (!goal) throw new HttpError(400, "Unknown goal")
+  return goal
+}
+
+const NOT_ARCHIVED = ["ACTIVE", "READY", "ACHIEVED"]
+
+function checkFunds(amount: number, available: number, from: { name: string } | null) {
+  if (amount > available) throw new HttpError(400, `Only ${kc(available)} in ${from ? from.name : "the Wallet"}`)
+}
+
+type Payout = {
+  kidId: string
+  createdById: string
+  amount: number
+  goalId?: string | null
+  note?: string | null
+}
+
+/**
+ * Records real money handed over by the parent as a debit from the Wallet or a goal jar.
+ * Cashing out the whole jar of a goal that reached its target marks the goal ACHIEVED.
+ */
+export function payout(p: Payout) {
+  return serialize(async () => {
+    const achieved = await db.$transaction(async (tx) => {
+      const goal = await pot(tx, p.kidId, p.goalId, NOT_ARCHIVED)
+      const { wallet, byGoal } = await balances(tx, p.kidId)
+      const available = goal ? (byGoal.get(goal.id) ?? 0) : wallet
+      checkFunds(p.amount, available, goal)
+      await tx.ledgerEntry.create({
+        data: {
+          kidId: p.kidId,
+          createdById: p.createdById,
+          type: "PAYOUT",
+          groupId: randomUUID(),
+          note: p.note ?? null,
+          goalId: goal?.id ?? null,
+          amount: -p.amount,
+        },
+      })
+      const done = !!goal && goal.status !== "ACHIEVED" && p.amount === available && available >= goal.targetAmount
+      if (done) {
+        await tx.goal.update({
+          where: { id: goal.id },
+          data: {
+            status: "ACHIEVED",
+            allocationType: "NONE",
+            allocationValue: 0,
+          },
+        })
+      }
+      await refreshGoalStatuses(tx, p.kidId)
+      return done
+    })
+    await awardBadges(p.kidId)
+    return { achieved }
   })
 }
 
+type Transfer = {
+  kidId: string
+  createdById: string
+  amount: number
+  fromGoalId?: string | null
+  toGoalId?: string | null
+  note?: string | null
+}
+
+/** Moves Kid Coins between the Wallet and goal jars (or between two jars). */
+export function transfer(t: Transfer) {
+  return serialize(async () => {
+    await db.$transaction(async (tx) => {
+      if ((t.fromGoalId ?? null) === (t.toGoalId ?? null)) throw new HttpError(400, "Pick two different places")
+      const from = await pot(tx, t.kidId, t.fromGoalId, NOT_ARCHIVED)
+      const to = await pot(tx, t.kidId, t.toGoalId, ["ACTIVE", "READY"])
+      const { wallet, byGoal } = await balances(tx, t.kidId)
+      checkFunds(t.amount, from ? (byGoal.get(from.id) ?? 0) : wallet, from)
+      const base = {
+        kidId: t.kidId,
+        createdById: t.createdById,
+        type: "TRANSFER",
+        groupId: randomUUID(),
+        note: t.note || `Moved to ${to ? to.name : "Wallet"}`,
+      }
+      await tx.ledgerEntry.create({
+        data: { ...base, goalId: from?.id ?? null, amount: -t.amount },
+      })
+      await tx.ledgerEntry.create({
+        data: { ...base, goalId: to?.id ?? null, amount: t.amount },
+      })
+      await refreshGoalStatuses(tx, t.kidId)
+    })
+    await awardBadges(t.kidId)
+  })
+}

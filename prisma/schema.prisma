@@ -12,6 +12,8 @@ model User {
   name         String
   email        String   @unique
   passwordHash String
+  /// bcrypt hash of the 4-digit PIN that unlocks Kid Mode (null until set)
+  kidModePinHash String?
   createdAt    DateTime @default(now())
   kids         Kid[]
 }
@@ -32,6 +34,7 @@ model Kid {
   goals          Goal[]
   entries        LedgerEntry[]
   tasks          Task[]
+  badges         Badge[]
 
   @@index([parentId])
 }
@@ -43,7 +46,7 @@ model Goal {
   name            String
   emoji           String        @default("🎯")
   targetAmount    Int
-  /// ACTIVE | READY (jar reached the target) | ARCHIVED (removed; kept for the statement)
+  /// ACTIVE | READY (jar reached the target) | ACHIEVED (READY jar fully cashed out) | ARCHIVED (removed; kept for the statement)
   status          String        @default("ACTIVE")
   /// NONE | PERCENT | FIXED: share of each Monthly Earning moved into this goal's jar
   allocationType  String        @default("NONE")
@@ -64,7 +67,7 @@ model LedgerEntry {
   goal           Goal?    @relation(fields: [goalId], references: [id], onDelete: Cascade)
   /// Signed whole Kid Coins
   amount         Int
-  /// MONTHLY_EARNING | EXTRA_EARNING | TASK_EARNING | TRANSFER
+  /// MONTHLY_EARNING | EXTRA_EARNING | TASK_EARNING | TRANSFER | PAYOUT
   type           String
   groupId        String
   note           String?
@@ -96,4 +99,15 @@ model Task {
   updatedAt    DateTime  @updatedAt
 
   @@index([kidId, status])
+}
+
+model Badge {
+  id       String   @id @default(cuid())
+  kidId    String
+  kid      Kid      @relation(fields: [kidId], references: [id], onDelete: Cascade)
+  /// See src/badges.ts
+  code     String
+  earnedAt DateTime @default(now())
+
+  @@unique([kidId, code])
 }
