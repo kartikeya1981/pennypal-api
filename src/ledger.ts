@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client"
 import { db } from "./db"
 import { HttpError } from "./errors"
 
-export type EntryType = "MONTHLY_EARNING" | "EXTRA_EARNING" | "TRANSFER"
+export type EntryType = "MONTHLY_EARNING" | "EXTRA_EARNING" | "TASK_EARNING" | "TRANSFER"
 export type AllocationType = "NONE" | "PERCENT" | "FIXED"
 
 type Tx = Prisma.TransactionClient
@@ -67,7 +67,7 @@ type Credit = {
   kidId: string
   createdById: string
   amount: number
-  type: Extract<EntryType, "MONTHLY_EARNING" | "EXTRA_EARNING">
+  type: Exclude<EntryType, "TRANSFER">
   note?: string | null
   /** Credit straight into this goal's jar instead of the Wallet + auto-split. */
   goalId?: string | null

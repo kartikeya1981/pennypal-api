@@ -8,6 +8,7 @@ import { accountRouter } from "./routes/account"
 import { authRouter } from "./routes/auth"
 import { goalsRouter } from "./routes/goals"
 import { kidsRouter } from "./routes/kids"
+import { kidTasksRouter, tasksRouter } from "./routes/tasks"
 import { meRouter } from "./routes/me"
 
 export function createApp() {
@@ -23,8 +24,9 @@ export function createApp() {
   })
   app.use("/auth", authRouter)
   app.use("/me", requireAuth, meRouter)
-  app.use("/kids", requireAuth, kidsRouter, accountRouter)
+  app.use("/kids", requireAuth, kidsRouter, accountRouter, kidTasksRouter)
   app.use("/goals", requireAuth, goalsRouter)
+  app.use("/tasks", requireAuth, tasksRouter)
 
   app.use(() => {
     throw new HttpError(404, "Not found")
